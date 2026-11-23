@@ -2,7 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
-#include "DSP/ChoirFairyEngine.h"
+#include "DSP/ChoirFairyV2Engine.h"
 #include <array>
 #include <atomic>
 
@@ -47,7 +47,7 @@ public:
     static constexpr int kScopeCapacity = 8192;
     static constexpr int kFftOrder      = 12;   // 4096-pt display FFT
     static constexpr int kFftSize       = 1 << kFftOrder;
-    static constexpr int kMaxHarmonics  = choirfairy::HarmonicAnalyzer20::kMaxHarmonics;
+    static constexpr int kMaxHarmonics  = choirfairy2::kMaxHarmonics;
 
     ChoirFairyAudioProcessor();
     ~ChoirFairyAudioProcessor() override;
@@ -69,7 +69,7 @@ public:
     bool acceptsMidi() const override  { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.15; }
+    double getTailLengthSeconds() const override { return 0.25; }
 
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
@@ -82,8 +82,9 @@ public:
 
     juce::AudioProcessorValueTreeState apvts;
 
-    // Lock-free telemetry for UI
+    // Lock-free telemetry for GUI
     double getCurrentSampleRate() const noexcept  { return currentFsAtomic.load(std::memory_order_relaxed); }
+    int    getEngineLatencySamples() const noexcept { return latencyAtomic.load(std::memory_order_relaxed); }
     float  getTrackedF0() const noexcept          { return trackedF0Atomic.load(std::memory_order_relaxed); }
     float  getConfidence() const noexcept         { return confidenceAtomic.load(std::memory_order_relaxed); }
     float  getLowCutCutoffHz() const noexcept     { return lowCutHzAtomic.load(std::memory_order_relaxed); }
@@ -99,34 +100,37 @@ public:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
 private:
-    choirfairy::ChoirFairyEngine engine;
+    choirfairy2::ChoirFairyV2Engine engine;
 
     // Smoothed continuous parameters
     juce::SmoothedValue<double> smOffsetSt, smFloorHz;
     juce::SmoothedValue<double> smDetune, smTiming, smDrift, smAirBlend, smTilt, smWidth, smMix, smOutGain;
 
     // Cached raw parameter pointers
-    std::atomic<float>* pMinF0      = nullptr;
-    std::atomic<float>* pMaxF0      = nullptr;
-    std::atomic<float>* pSlope      = nullptr;
-    std::atomic<float>* pOffsetSt   = nullptr;
-    std::atomic<float>* pFloorHz    = nullptr;
+    std::atomic<float>* pMinF0       = nullptr;
+    std::atomic<float>* pMaxF0       = nullptr;
+    std::atomic<float>* pSlope       = nullptr;
+    std::atomic<float>* pPhaseMode   = nullptr;
+    std::atomic<float>* pOffsetSt    = nullptr;
+    std::atomic<float>* pFloorHz     = nullptr;
 
-    std::atomic<float>* pNumHarm    = nullptr;
-    std::atomic<float>* pDetune     = nullptr;
-    std::atomic<float>* pTiming     = nullptr;
-    std::atomic<float>* pDrift      = nullptr;
-    std::atomic<float>* pAirBlend   = nullptr;
-    std::atomic<float>* pTilt       = nullptr;
-    std::atomic<float>* pWidth      = nullptr;
-    std::atomic<float>* pMix        = nullptr;
+    std::atomic<float>* pVoiceMode   = nullptr;
+    std::atomic<float>* pNumHarm     = nullptr;
+    std::atomic<float>* pDetune      = nullptr;
+    std::atomic<float>* pTiming      = nullptr;
+    std::atomic<float>* pDrift       = nullptr;
+    std::atomic<float>* pAirBlend    = nullptr;
+    std::atomic<float>* pTilt        = nullptr;
+    std::atomic<float>* pWidth       = nullptr;
+    std::atomic<float>* pMix         = nullptr;
 
-    std::atomic<float>* pAudition   = nullptr;
-    std::atomic<float>* pOutGain    = nullptr;
-    std::atomic<float>* pBypass     = nullptr;
+    std::atomic<float>* pAudition    = nullptr;
+    std::atomic<float>* pOutGain     = nullptr;
+    std::atomic<float>* pBypass      = nullptr;
 
     // Lock-free telemetry atomics
     std::atomic<double> currentFsAtomic  { 48000.0 };
+    std::atomic<int>    latencyAtomic    { 4096 };
     std::atomic<float>  trackedF0Atomic  { 180.0f };
     std::atomic<float>  confidenceAtomic { 0.0f };
     std::atomic<float>  lowCutHzAtomic   { 60.0f };

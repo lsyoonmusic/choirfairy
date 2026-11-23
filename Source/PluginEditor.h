@@ -22,11 +22,12 @@ private:
     LookAndFeelChoirFairy laf;
     ChoirSpectrumView spectrumView;
 
-    // Card 1: Tracking Low-Cut & Pitch Range
-    juce::ComboBox slopeBox;
+    // Card 1: Surgical Tracking Low-Cut & Pitch Range
+    juce::ComboBox slopeBox, phaseModeBox;
     juce::Slider offsetKnob, floorKnob, minF0Knob, maxF0Knob;
 
-    // Card 2: 20-Harmonic Stereo Choir Doubler
+    // Card 2: 20-Harmonic SMS Stereo Choir Engine
+    juce::ComboBox voiceModeBox;
     juce::Slider numHarmKnob, detuneKnob, timingKnob, driftKnob;
     juce::Slider airBlendKnob, tiltKnob, widthKnob, mixKnob;
 
@@ -39,8 +40,9 @@ private:
     using CAtt = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using BAtt = juce::AudioProcessorValueTreeState::ButtonAttachment;
 
-    std::unique_ptr<CAtt> attSlope;
+    std::unique_ptr<CAtt> attSlope, attPhaseMode;
     std::unique_ptr<SAtt> attOffset, attFloor, attMinF0, attMaxF0;
+    std::unique_ptr<CAtt> attVoiceMode;
     std::unique_ptr<SAtt> attNumHarm, attDetune, attTiming, attDrift;
     std::unique_ptr<SAtt> attAirBlend, attTilt, attWidth, attMix;
     std::unique_ptr<CAtt> attAudition;

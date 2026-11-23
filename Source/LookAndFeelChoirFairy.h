@@ -38,14 +38,12 @@ public:
             static_cast<int>(slider.getProperties().getWithDefault(kAccentColourProp, static_cast<int>(0xffa894ff))));
         const juce::Colour accent(colHex);
 
-        // Background track arc
-        const float arcR = r + 5.2f;
+        const float arcR = r + 5.0f;
         juce::Path track;
         track.addCentredArc(cx, cy, arcR, arcR, 0.0f, startAngle, endAngle, true);
         g.setColour(juce::Colour(0xff272e3e));
         g.strokePath(track, juce::PathStrokeType(2.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
-        // Active value arc
         if (sliderPos > 0.002f)
         {
             juce::Path valArc;
@@ -54,7 +52,6 @@ public:
             g.strokePath(valArc, juce::PathStrokeType(2.7f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
 
-        // Knob shadow & matte body
         g.setColour(juce::Colours::black.withAlpha(0.55f));
         g.fillEllipse(cx - r + 1.0f, cy - r + 2.5f, r * 2.0f, r * 2.0f);
 
@@ -65,7 +62,6 @@ public:
         g.setColour(juce::Colour(0xff4c556b));
         g.drawEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f, 1.0f);
 
-        // Pointer tick
         const float ptrA = angle - juce::MathConstants<float>::halfPi;
         g.setColour(accent.brighter(0.32f));
         g.drawLine(cx + std::cos(ptrA) * (r * 0.28f), cy + std::sin(ptrA) * (r * 0.28f),
@@ -90,14 +86,6 @@ public:
     }
 };
 
-/**
- * Real-Time 20 Hz - 16 kHz Dual-Trace Spectrum & 20-Harmonic Choir Visualizer.
- * Displays:
- *   - Input spectrum (amber) vs Output stereo choir spectrum (lavender-cyan)
- *   - Steep Pitch-Tracking Butterworth Low-Cut transfer curve (up to 96 dB/oct!)
- *   - All 20 tracked harmonic energy pillars (H1 .. H20)
- *   - Dynamic Air Crossover line where timing-offset original high-band air begins
- */
 class ChoirSpectrumView : public juce::Component
 {
 public:
@@ -113,9 +101,10 @@ public:
         smoothOutDb.fill(-96.0f);
     }
 
-    void updateFrame(int lowCutSlopeIdx, int numHarmonics, float airBlendPct)
+    void updateFrame(int lowCutSlopeIdx, int phaseModeIdx, int numHarmonics, float airBlendPct)
     {
         slopeIndex  = lowCutSlopeIdx;
+        phaseMode   = phaseModeIdx;
         activeHarms = numHarmonics;
         airBlend    = airBlendPct * 0.01f;
 
@@ -124,6 +113,7 @@ public:
         lowCutHz   = processorRef.getLowCutCutoffHz();
         xoverHz    = processorRef.getXoverHz();
         sampleRate = static_cast<float>(processorRef.getCurrentSampleRate());
+        latencyMs  = 1000.0f * static_cast<float>(processorRef.getEngineLatencySamples()) / std::max(sampleRate, 8000.0f);
 
         for (int k = 0; k < ChoirFairyAudioProcessor::kMaxHarmonics; ++k)
             harmAmps[static_cast<size_t>(k)] = processorRef.getHarmonicAmp(k);
@@ -199,7 +189,7 @@ public:
             g.fillRect(xx, plot.getY(), plot.getRight() - xx, plot.getHeight());
         }
 
-        // 3. Dual-Trace Spectra (Input Amber + Output Lavender-Cyan)
+        // 3. Dual-Trace Spectra
         auto buildSpecPath = [&](const std::array<float, kBins>& dbArr, bool closeFill) -> juce::Path
         {
             juce::Path path;
@@ -242,7 +232,7 @@ public:
         g.setColour(juce::Colour(0xffb5a3ff));
         g.strokePath(outStroke, juce::PathStrokeType(1.5f));
 
-        // 4. Live 20-Harmonic Tracked Pillars (H1 .. H20)
+        // 4. Live 20-Harmonic SMS Tracked Pillars
         if (confidence > 0.10f)
         {
             g.setFont(juce::Font(juce::FontOptions(8.2f, juce::Font::bold)));
@@ -261,13 +251,12 @@ public:
                     : juce::Colour(0xffb29cff).interpolatedWith(juce::Colour(0xff5be8e0), static_cast<float>(k) / 19.0f);
 
                 const float barW = (k < 4) ? 3.2f : 2.0f;
-                g.setColour(pCol.withAlpha(0.75f * confidence));
+                g.setColour(pCol.withAlpha(0.78f * confidence));
                 g.fillRect(hx - barW * 0.5f, hy, barW, std::max(0.0f, plot.getBottom() - hy));
 
-                // Label key landmarks (H1, H2, H3, H5, H10, H15, H20) so upper harmonics don't overlap text
                 if (k == 0 || k == 1 || k == 2 || k == 4 || k == 9 || k == 14 || k == activeHarms - 1)
                 {
-                    g.setColour(pCol.withAlpha(0.92f * confidence));
+                    g.setColour(pCol.withAlpha(0.94f * confidence));
                     g.drawText("H" + juce::String(k + 1),
                                static_cast<int>(hx - 12), static_cast<int>(plot.getY() + 1), 24, 11,
                                juce::Justification::centred);
@@ -275,7 +264,7 @@ public:
             }
         }
 
-        // 5. Dynamic Air Crossover Dashed Boundary
+        // 5. Dynamic Linear-Phase Air Crossover Boundary
         if (xoverHz >= fMin && xoverHz <= fMax)
         {
             const float xx = freqToX(xoverHz);
@@ -284,28 +273,40 @@ public:
             g.drawDashedLine(juce::Line<float>(xx, plot.getY() + 13.0f, xx, plot.getBottom()),
                              dashes, 2, 1.2f);
             g.setFont(juce::Font(juce::FontOptions(8.2f, juce::Font::bold)));
-            g.drawText("AIR >", static_cast<int>(xx + 3), static_cast<int>(plot.getY() + 14), 38, 11,
+            g.drawText("LIN AIR >", static_cast<int>(xx + 3), static_cast<int>(plot.getY() + 14), 52, 11,
                        juce::Justification::centredLeft);
         }
 
-        // 6. Live Surgical Pitch-Tracking Low-Cut Curve (up to 96 dB/oct = 16th order!)
+        // 6. Live Surgical Pitch-Tracking Low-Cut Curve (up to 96 dB/oct + BRICKWALL!)
         if (slopeIndex > 0)
         {
+            const bool isBrick = (slopeIndex == 7);
             static constexpr int orders[6] = { 2, 4, 6, 8, 12, 16 };
             const int order = orders[juce::jlimit(0, 5, slopeIndex - 1)];
 
             juce::Path lcCurve;
-            const int pts = 220;
+            const int pts = 240;
             for (int i = 0; i <= pts; ++i)
             {
                 const float t = static_cast<float>(i) / static_cast<float>(pts);
                 const float f = std::exp(logMin + t * (logMax - logMin));
-                const float ratio = lowCutHz / std::max(f, 1.0f);
-                // Guard std::pow overflow on 16th-order (2*order = 32)
-                const float logRatio = std::log10(std::max(ratio, 1e-4f));
-                const float db = (ratio <= 1.0f)
-                    ? (-10.0f * std::log10(1.0f + std::pow(ratio, static_cast<float>(2 * order))))
-                    : (-10.0f * std::log10(1.0f + std::pow(10.0f, std::min(12.0f, static_cast<float>(2 * order) * logRatio))));
+                float db = 0.0f;
+
+                if (isBrick)
+                {
+                    const float trans = std::max(18.0f, lowCutHz * 0.06f);
+                    const float u = juce::jlimit(0.0f, 1.0f, (f - (lowCutHz - trans)) / (2.0f * trans));
+                    const float mag = 0.5f - 0.5f * std::cos(3.14159265f * u);
+                    db = 20.0f * std::log10(std::max(mag, 1e-4f));
+                }
+                else
+                {
+                    const float ratio = lowCutHz / std::max(f, 1.0f);
+                    const float logRatio = std::log10(std::max(ratio, 1e-4f));
+                    db = (ratio <= 1.0f)
+                        ? (-10.0f * std::log10(1.0f + std::pow(ratio, static_cast<float>(2 * order))))
+                        : (-10.0f * std::log10(1.0f + std::pow(10.0f, std::min(12.0f, static_cast<float>(2 * order) * logRatio))));
+                }
 
                 const float py = dbToY(-6.0f + db);
                 const float px = plot.getX() + t * plot.getWidth();
@@ -325,38 +326,44 @@ public:
 
         // 7. Top Live Telemetry Header Strip
         const auto topStrip = juce::Rectangle<float>(b.getX() + 14.0f, b.getY() + 7.0f, b.getWidth() - 28.0f, 18.0f);
-        const bool locked = (confidence > 0.30f);
+        const bool locked = (confidence > 0.25f);
 
         g.setColour(locked ? juce::Colour(0xff58f5c8) : juce::Colour(0xff424c5f));
         g.fillEllipse(topStrip.getX(), topStrip.getCentreY() - 4.0f, 8.0f, 8.0f);
 
-        g.setFont(juce::Font(juce::FontOptions(11.0f, juce::Font::bold)));
+        g.setFont(juce::Font(juce::FontOptions(10.8f, juce::Font::bold)));
         g.setColour(locked ? juce::Colour(0xffffdf8a) : juce::Colour(0xff7f8ca6));
         const juce::String noteStr = locked
-            ? ("f0 LOCK: " + freqToNoteName(trackedF0) + "  (" + juce::String(trackedF0, 1) + " Hz)")
+            ? ("f0 LOCK: " + freqToNoteName(trackedF0) + " (" + juce::String(trackedF0, 1) + " Hz)")
             : "f0: UNVOICED / STANDBY";
         g.drawText(noteStr, static_cast<int>(topStrip.getX() + 14), static_cast<int>(topStrip.getY()),
-                   230, 18, juce::Justification::centredLeft);
+                   215, 18, juce::Justification::centredLeft);
 
-        static constexpr const char* slopeNames[7] = { "OFF", "12dB", "24dB", "36dB", "48dB", "72dB", "96dB" };
-        g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
+        static constexpr const char* slopeNames[8] = { "OFF", "12dB", "24dB", "36dB", "48dB", "72dB", "96dB", "BRICK" };
+        const juce::String phStr = (phaseMode == 0) ? "LIN" : "MIN";
+        g.setFont(juce::Font(juce::FontOptions(9.8f, juce::Font::bold)));
         g.setColour(juce::Colour(0xffff8a7a));
-        g.drawText("LOW-CUT: " + juce::String(lowCutHz, 1) + " Hz (" + slopeNames[juce::jlimit(0, 6, slopeIndex)] + ")",
-                   static_cast<int>(topStrip.getX() + 255), static_cast<int>(topStrip.getY()),
-                   195, 18, juce::Justification::centredLeft);
+        g.drawText("LOW-CUT: " + juce::String(lowCutHz, 1) + " Hz (" + slopeNames[juce::jlimit(0, 7, slopeIndex)] + " " + phStr + ")",
+                   static_cast<int>(topStrip.getX() + 235), static_cast<int>(topStrip.getY()),
+                   215, 18, juce::Justification::centredLeft);
 
         g.setColour(juce::Colour(0xff7ceaff));
-        g.drawText("H1-H" + juce::String(activeHarms) + " SINES  |  AIR > " + juce::String(xoverHz, 0) + " Hz",
-                   static_cast<int>(topStrip.getX() + 465), static_cast<int>(topStrip.getY()),
-                   235, 18, juce::Justification::centredLeft);
+        g.drawText("SMS H1-H" + juce::String(activeHarms) + " | AIR > " + juce::String(xoverHz, 0) + " Hz",
+                   static_cast<int>(topStrip.getX() + 460), static_cast<int>(topStrip.getY()),
+                   210, 18, juce::Justification::centredLeft);
 
         g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
+        g.setColour(juce::Colour(0xff8fa0bf));
+        g.drawText("LOOKAHEAD " + juce::String(latencyMs, 1) + " ms",
+                   static_cast<int>(topStrip.getRight() - 185), static_cast<int>(topStrip.getY()),
+                   112, 18, juce::Justification::centredRight);
+
         g.setColour(juce::Colour(0xffe09c5a));
-        g.drawText("IN", static_cast<int>(topStrip.getRight() - 78), static_cast<int>(topStrip.getY()),
-                   34, 18, juce::Justification::centredRight);
+        g.drawText("IN", static_cast<int>(topStrip.getRight() - 68), static_cast<int>(topStrip.getY()),
+                   30, 18, juce::Justification::centredRight);
         g.setColour(juce::Colour(0xffb5a3ff));
-        g.drawText("OUT", static_cast<int>(topStrip.getRight() - 38), static_cast<int>(topStrip.getY()),
-                   38, 18, juce::Justification::centredRight);
+        g.drawText("OUT", static_cast<int>(topStrip.getRight() - 34), static_cast<int>(topStrip.getY()),
+                   34, 18, juce::Justification::centredRight);
     }
 
 private:
@@ -403,11 +410,13 @@ private:
     std::array<float, kBins> smoothOutDb {};
 
     float sampleRate  = 48000.0f;
+    float latencyMs   = 85.3f;
     float trackedF0   = 180.0f;
     float confidence  = 0.0f;
     float lowCutHz    = 60.0f;
     float xoverHz     = 3600.0f;
-    int   slopeIndex  = 3;
+    int   slopeIndex  = 4;
+    int   phaseMode   = 0;
     int   activeHarms = 20;
     float airBlend    = 0.85f;
     std::array<float, ChoirFairyAudioProcessor::kMaxHarmonics> harmAmps {};

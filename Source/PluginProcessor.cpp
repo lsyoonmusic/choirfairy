@@ -6,26 +6,28 @@ ChoirFairyAudioProcessor::ChoirFairyAudioProcessor()
     : AudioProcessor(BusesProperties()
                          .withInput("Input", juce::AudioChannelSet::stereo(), true)
                          .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts(*this, nullptr, "ChoirFairyParams", createParameterLayout())
+      apvts(*this, nullptr, "ChoirFairyV2Params", createParameterLayout())
 {
-    pMinF0    = apvts.getRawParameterValue("minF0");
-    pMaxF0    = apvts.getRawParameterValue("maxF0");
-    pSlope    = apvts.getRawParameterValue("lowCutSlope");
-    pOffsetSt = apvts.getRawParameterValue("lowCutOffset");
-    pFloorHz  = apvts.getRawParameterValue("lowCutFloor");
+    pMinF0     = apvts.getRawParameterValue("minF0");
+    pMaxF0     = apvts.getRawParameterValue("maxF0");
+    pSlope     = apvts.getRawParameterValue("lowCutSlope");
+    pPhaseMode = apvts.getRawParameterValue("lowCutPhase");
+    pOffsetSt  = apvts.getRawParameterValue("lowCutOffset");
+    pFloorHz   = apvts.getRawParameterValue("lowCutFloor");
 
-    pNumHarm  = apvts.getRawParameterValue("numHarmonics");
-    pDetune   = apvts.getRawParameterValue("detuneCents");
-    pTiming   = apvts.getRawParameterValue("timingMs");
-    pDrift    = apvts.getRawParameterValue("driftPct");
-    pAirBlend = apvts.getRawParameterValue("airBlendPct");
-    pTilt     = apvts.getRawParameterValue("tiltDb");
-    pWidth    = apvts.getRawParameterValue("widthPct");
-    pMix      = apvts.getRawParameterValue("doublerMixPct");
+    pVoiceMode = apvts.getRawParameterValue("voiceMode");
+    pNumHarm   = apvts.getRawParameterValue("numHarmonics");
+    pDetune    = apvts.getRawParameterValue("detuneCents");
+    pTiming    = apvts.getRawParameterValue("timingMs");
+    pDrift     = apvts.getRawParameterValue("driftPct");
+    pAirBlend  = apvts.getRawParameterValue("airBlendPct");
+    pTilt      = apvts.getRawParameterValue("tiltDb");
+    pWidth     = apvts.getRawParameterValue("widthPct");
+    pMix       = apvts.getRawParameterValue("doublerMixPct");
 
-    pAudition = apvts.getRawParameterValue("audition");
-    pOutGain  = apvts.getRawParameterValue("outGain");
-    pBypass   = apvts.getRawParameterValue("bypass");
+    pAudition  = apvts.getRawParameterValue("audition");
+    pOutGain   = apvts.getRawParameterValue("outGain");
+    pBypass    = apvts.getRawParameterValue("bypass");
 
     for (auto& a : harmAmpAtomic)
         a.store(0.0f, std::memory_order_relaxed);
@@ -37,7 +39,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChoirFairyAudioProcessor::cr
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
 
-    // 1. Pitch Tracker & Surgical Tracking Low-Cut
+    // 1. Pitch Range & Surgical Tracking Low-Cut
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { "minF0", 1 }, "Min Pitch",
         juce::NormalisableRange<float>(45.0f, 300.0f, 1.0f, 0.5f), 75.0f));
@@ -47,15 +49,21 @@ juce::AudioProcessorValueTreeState::ParameterLayout ChoirFairyAudioProcessor::cr
 
     params.push_back(std::make_unique<juce::AudioParameterChoice>(
         juce::ParameterID { "lowCutSlope", 1 }, "Low-Cut Slope",
-        juce::StringArray { "OFF", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 3));
+        juce::StringArray { "OFF", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct", "BRICKWALL" }, 4));
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "lowCutPhase", 1 }, "Low-Cut Phase",
+        juce::StringArray { "LINEAR PHASE", "MIN PHASE" }, 0));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { "lowCutOffset", 1 }, "Low-Cut Offset",
-        juce::NormalisableRange<float>(-12.0f, 0.0f, 0.1f), -3.5f));
+        juce::NormalisableRange<float>(-12.0f, 0.0f, 0.1f), -3.0f));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
         juce::ParameterID { "lowCutFloor", 1 }, "Unvoiced Floor",
         juce::NormalisableRange<float>(20.0f, 250.0f, 1.0f, 0.5f), 60.0f));
 
-    // 2. 20-Harmonic Stereo Choir Doubler
+    // 2. 20-Harmonic SMS Stereo Choir Doubler
+    params.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "voiceMode", 1 }, "Choir Voices",
+        juce::StringArray { "2-VOICE (Tight)", "4-VOICE (Choir)" }, 1));
     params.push_back(std::make_unique<juce::AudioParameterInt>(
         juce::ParameterID { "numHarmonics", 1 }, "Harmonics", 4, 20, 20));
     params.push_back(std::make_unique<juce::AudioParameterFloat>(
@@ -99,6 +107,10 @@ void ChoirFairyAudioProcessor::prepareToPlay(double sampleRate, int)
     currentFsAtomic.store(fs, std::memory_order_relaxed);
 
     engine.prepare(fs);
+    const int lat = engine.getLatencySamples();
+    latencyAtomic.store(lat, std::memory_order_relaxed);
+    setLatencySamples(lat); // Exact DAW PDC compensation (4096 @ 48kHz = 85.3ms)
+
     inputScope.reset();
     outputScope.reset();
 
@@ -106,7 +118,7 @@ void ChoirFairyAudioProcessor::prepareToPlay(double sampleRate, int)
     smOffsetSt.reset(fs, rampSec);
     smFloorHz.reset(fs, rampSec);
     smDetune.reset(fs, rampSec);
-    smTiming.reset(fs, 0.035); // Extra-smooth delay time glide
+    smTiming.reset(fs, 0.035);
     smDrift.reset(fs, rampSec);
     smAirBlend.reset(fs, rampSec);
     smTilt.reset(fs, rampSec);
@@ -124,8 +136,6 @@ void ChoirFairyAudioProcessor::prepareToPlay(double sampleRate, int)
     smWidth.setCurrentAndTargetValue(pWidth->load() * 0.01);
     smMix.setCurrentAndTargetValue(pMix->load() * 0.01);
     smOutGain.setCurrentAndTargetValue(pOutGain->load());
-
-    setLatencySamples(0); // Zero-latency dry path!
 }
 
 void ChoirFairyAudioProcessor::releaseResources()
@@ -138,7 +148,6 @@ bool ChoirFairyAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts
 {
     const auto outSet = layouts.getMainOutputChannelSet();
     const auto inSet  = layouts.getMainInputChannelSet();
-    // Allow mono->stereo (ideal for mono vocal tracks!) as well as stereo->stereo and mono->mono
     if (outSet != juce::AudioChannelSet::mono() && outSet != juce::AudioChannelSet::stereo())
         return false;
     if (inSet != juce::AudioChannelSet::mono() && inSet != juce::AudioChannelSet::stereo())
@@ -172,13 +181,15 @@ void ChoirFairyAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, ju
     smMix.setTargetValue(pMix->load() * 0.01);
     smOutGain.setTargetValue(pOutGain->load());
 
-    choirfairy::EngineParams p;
-    p.minF0Hz      = pMinF0->load();
-    p.maxF0Hz      = pMaxF0->load();
-    p.lowCutSlope  = static_cast<choirfairy::LowCutSlope>(static_cast<int>(std::round(pSlope->load())));
-    p.numHarmonics = static_cast<int>(std::round(pNumHarm->load()));
-    p.audition     = static_cast<choirfairy::AuditionMode>(static_cast<int>(std::round(pAudition->load())));
-    p.bypass       = pBypass->load() > 0.5f;
+    choirfairy2::EngineParams p;
+    p.minF0Hz        = pMinF0->load();
+    p.maxF0Hz        = pMaxF0->load();
+    p.lowCutSlope    = static_cast<choirfairy2::LowCutSlope>(static_cast<int>(std::round(pSlope->load())));
+    p.lowCutPhase    = static_cast<choirfairy2::FilterPhaseMode>(static_cast<int>(std::round(pPhaseMode->load())));
+    p.fourVoiceChoir = pVoiceMode->load() > 0.5f;
+    p.numHarmonics   = static_cast<int>(std::round(pNumHarm->load()));
+    p.audition       = static_cast<choirfairy2::AuditionMode>(static_cast<int>(std::round(pAudition->load())));
+    p.bypass         = pBypass->load() > 0.5f;
 
     const bool hasInR  = (numInCh >= 2);
     const bool hasOutR = (numOutCh >= 2);
@@ -223,7 +234,7 @@ void ChoirFairyAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, ju
     trackedF0Atomic.store(static_cast<float>(engine.getTrackedF0()), std::memory_order_relaxed);
     confidenceAtomic.store(static_cast<float>(engine.getConfidence()), std::memory_order_relaxed);
     lowCutHzAtomic.store(static_cast<float>(engine.getLowCutCutoffHz()), std::memory_order_relaxed);
-    xoverHzAtomic.store(static_cast<float>(engine.getXoverHz()), std::memory_order_relaxed);
+    xoverHzAtomic.store(static_cast<float>(engine.getAirXoverHz()), std::memory_order_relaxed);
 
     for (int k = 0; k < kMaxHarmonics; ++k)
         harmAmpAtomic[static_cast<size_t>(k)].store(

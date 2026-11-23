@@ -4,19 +4,25 @@ ChoirFairyAudioProcessorEditor::ChoirFairyAudioProcessorEditor(ChoirFairyAudioPr
     : AudioProcessorEditor(&p), processorRef(p), spectrumView(p)
 {
     setLookAndFeel(&laf);
-    setSize(940, 566);
+    setSize(960, 588);
 
     addAndMakeVisible(spectrumView);
 
     // Card 1: Surgical Tracking Low-Cut & Pitch Range
-    slopeBox.addItemList({ "OFF", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct" }, 1);
+    slopeBox.addItemList({ "OFF", "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "72 dB/oct", "96 dB/oct", "BRICKWALL" }, 1);
     addAndMakeVisible(slopeBox);
+    phaseModeBox.addItemList({ "LINEAR PHASE", "MIN PHASE" }, 1);
+    addAndMakeVisible(phaseModeBox);
+
     setupKnob(offsetKnob, " st", 0xffff6e5c);
     setupKnob(floorKnob,  " Hz", 0xffff6e5c);
     setupKnob(minF0Knob,  " Hz", 0xfff0c467);
     setupKnob(maxF0Knob,  " Hz", 0xfff0c467);
 
-    // Card 2: 20-Harmonic Stereo Choir Doubler
+    // Card 2: 20-Harmonic SMS Stereo Choir Engine
+    voiceModeBox.addItemList({ "2-VOICE (Tight)", "4-VOICE (Choir)" }, 1);
+    addAndMakeVisible(voiceModeBox);
+
     setupKnob(numHarmKnob,  "",    0xffb29cff);
     setupKnob(detuneKnob,   " ct", 0xffb29cff);
     setupKnob(timingKnob,   " ms", 0xffb29cff);
@@ -34,25 +40,27 @@ ChoirFairyAudioProcessorEditor::ChoirFairyAudioProcessorEditor(ChoirFairyAudioPr
     addAndMakeVisible(bypassBtn);
 
     auto& a = processorRef.apvts;
-    attSlope    = std::make_unique<CAtt>(a, "lowCutSlope",   slopeBox);
-    attOffset   = std::make_unique<SAtt>(a, "lowCutOffset",  offsetKnob);
-    attFloor    = std::make_unique<SAtt>(a, "lowCutFloor",   floorKnob);
-    attMinF0    = std::make_unique<SAtt>(a, "minF0",         minF0Knob);
-    attMaxF0    = std::make_unique<SAtt>(a, "maxF0",         maxF0Knob);
+    attSlope     = std::make_unique<CAtt>(a, "lowCutSlope",   slopeBox);
+    attPhaseMode = std::make_unique<CAtt>(a, "lowCutPhase",   phaseModeBox);
+    attOffset    = std::make_unique<SAtt>(a, "lowCutOffset",  offsetKnob);
+    attFloor     = std::make_unique<SAtt>(a, "lowCutFloor",   floorKnob);
+    attMinF0     = std::make_unique<SAtt>(a, "minF0",         minF0Knob);
+    attMaxF0     = std::make_unique<SAtt>(a, "maxF0",         maxF0Knob);
 
-    attNumHarm  = std::make_unique<SAtt>(a, "numHarmonics",  numHarmKnob);
-    attDetune   = std::make_unique<SAtt>(a, "detuneCents",   detuneKnob);
-    attTiming   = std::make_unique<SAtt>(a, "timingMs",      timingKnob);
-    attDrift    = std::make_unique<SAtt>(a, "driftPct",      driftKnob);
+    attVoiceMode = std::make_unique<CAtt>(a, "voiceMode",     voiceModeBox);
+    attNumHarm   = std::make_unique<SAtt>(a, "numHarmonics",  numHarmKnob);
+    attDetune    = std::make_unique<SAtt>(a, "detuneCents",   detuneKnob);
+    attTiming    = std::make_unique<SAtt>(a, "timingMs",      timingKnob);
+    attDrift     = std::make_unique<SAtt>(a, "driftPct",      driftKnob);
 
-    attAirBlend = std::make_unique<SAtt>(a, "airBlendPct",   airBlendKnob);
-    attTilt     = std::make_unique<SAtt>(a, "tiltDb",        tiltKnob);
-    attWidth    = std::make_unique<SAtt>(a, "widthPct",      widthKnob);
-    attMix      = std::make_unique<SAtt>(a, "doublerMixPct", mixKnob);
+    attAirBlend  = std::make_unique<SAtt>(a, "airBlendPct",   airBlendKnob);
+    attTilt      = std::make_unique<SAtt>(a, "tiltDb",        tiltKnob);
+    attWidth     = std::make_unique<SAtt>(a, "widthPct",      widthKnob);
+    attMix       = std::make_unique<SAtt>(a, "doublerMixPct", mixKnob);
 
-    attAudition = std::make_unique<CAtt>(a, "audition",      auditionBox);
-    attOutGain  = std::make_unique<SAtt>(a, "outGain",       outGainKnob);
-    attBypass   = std::make_unique<BAtt>(a, "bypass",        bypassBtn);
+    attAudition  = std::make_unique<CAtt>(a, "audition",      auditionBox);
+    attOutGain   = std::make_unique<SAtt>(a, "outGain",       outGainKnob);
+    attBypass    = std::make_unique<BAtt>(a, "bypass",        bypassBtn);
 
     startTimerHz(30);
 }
@@ -80,6 +88,7 @@ void ChoirFairyAudioProcessorEditor::timerCallback()
 {
     spectrumView.updateFrame(
         slopeBox.getSelectedItemIndex(),
+        phaseModeBox.getSelectedItemIndex(),
         static_cast<int>(std::round(numHarmKnob.getValue())),
         static_cast<float>(airBlendKnob.getValue())
     );
@@ -90,7 +99,6 @@ void ChoirFairyAudioProcessorEditor::paint(juce::Graphics& g)
     const float w = static_cast<float>(getWidth());
     const float h = static_cast<float>(getHeight());
 
-    // Deep twilight slate chassis
     juce::ColourGradient bg(juce::Colour(0xff191d2a), 0.0f, 0.0f,
                             juce::Colour(0xff10131c), 0.0f, h, false);
     g.setGradientFill(bg);
@@ -104,16 +112,16 @@ void ChoirFairyAudioProcessorEditor::paint(juce::Graphics& g)
 
     g.setColour(juce::Colour(0xff808ca8));
     g.setFont(juce::Font(juce::FontOptions(9.8f, juce::Font::bold)));
-    g.drawText("ASIMORPH's FELLAS", 20, 7, 190, 12, juce::Justification::centredLeft);
+    g.drawText("ASIMORPH's FELLAS", 20, 7, 200, 12, juce::Justification::centredLeft);
 
     g.setColour(juce::Colour(0xfff3f5fc));
     g.setFont(juce::Font(juce::FontOptions(18.0f, juce::Font::bold)));
-    g.drawText("CHOIR FAIRY", 20, 19, 190, 21, juce::Justification::centredLeft);
+    g.drawText("CHOIR FAIRY  v2", 20, 19, 210, 21, juce::Justification::centredLeft);
 
     g.setColour(juce::Colour(0xffb5a3ff));
-    g.setFont(juce::Font(juce::FontOptions(10.0f, juce::Font::bold)));
-    g.drawText("20-HARMONIC STEREO DOUBLER  +  96 dB/oct TRACKING LOW-CUT  |  PING-PONG JUMP SNAP",
-               210, 14, 710, 16, juce::Justification::centredRight);
+    g.setFont(juce::Font(juce::FontOptions(9.8f, juce::Font::bold)));
+    g.drawText("HQ LOOKAHEAD SMS 20-HARMONIC CHOIR  +  LINEAR-PHASE BRICKWALL LOW-CUT  |  PDC ALIGNED",
+               230, 14, 710, 16, juce::Justification::centredRight);
 
     // Three Module Cards
     auto drawCard = [&g](juce::Rectangle<float> r, const juce::String& title, juce::Colour accent)
@@ -132,76 +140,80 @@ void ChoirFairyAudioProcessorEditor::paint(juce::Graphics& g)
                    static_cast<int>(r.getWidth() - 26), 16, juce::Justification::centredLeft);
     };
 
-    drawCard({ 16.0f,  268.0f, 240.0f, 282.0f }, "SURGICAL LOW-CUT & f0",   juce::Colour(0xffff6e5c));
-    drawCard({ 268.0f, 268.0f, 444.0f, 282.0f }, "20-HARMONIC CHOIR ENGINE", juce::Colour(0xffb29cff));
-    drawCard({ 724.0f, 268.0f, 200.0f, 282.0f }, "MONITOR & OUTPUT",        juce::Colour(0xff5ce6ff));
+    drawCard({ 16.0f,  270.0f, 256.0f, 302.0f }, "SURGICAL LOW-CUT & f0",   juce::Colour(0xffff6e5c));
+    drawCard({ 284.0f, 270.0f, 452.0f, 302.0f }, "HQ LOOKAHEAD SMS CHOIR",  juce::Colour(0xffb29cff));
+    drawCard({ 748.0f, 270.0f, 196.0f, 302.0f }, "MONITOR & OUTPUT",        juce::Colour(0xff5ce6ff));
 
-    // Horizontal inner dividers
+    // Inner section dividers
     g.setColour(juce::Colour(0xff252c3e));
-    g.drawHorizontalLine(444, 28.0f,  244.0f); // Low-Cut vs Pitch Range
-    g.drawHorizontalLine(416, 282.0f, 698.0f); // Harmonic Synthesis vs Air/Space
+    g.drawHorizontalLine(464, 28.0f,  260.0f);
+    g.drawHorizontalLine(438, 298.0f, 722.0f);
 
     auto lbl = [&g](const juce::String& txt, int x, int y, int width, juce::Colour col = juce::Colour(0xff9aa7c2))
     {
         g.setColour(col);
-        g.setFont(juce::Font(juce::FontOptions(9.0f, juce::Font::bold)));
+        g.setFont(juce::Font(juce::FontOptions(8.9f, juce::Font::bold)));
         g.drawText(txt, x, y, width, 13, juce::Justification::centred);
     };
 
     // Card 1 Labels
-    lbl("SLOPE (UP TO 96 dB/oct)", 36, 296, 200, juce::Colour(0xffff968a));
-    lbl("OFFSET",  34, 344, 96);
-    lbl("FLOOR",  142, 344, 96);
-    lbl("MIN f0",  34, 450, 96, juce::Colour(0xfff0c467));
-    lbl("MAX f0", 142, 450, 96, juce::Colour(0xfff0c467));
+    lbl("SLOPE",   30, 298, 110, juce::Colour(0xffff968a));
+    lbl("PHASE",  148, 298, 110, juce::Colour(0xffff968a));
+    lbl("OFFSET",  38, 354,  96);
+    lbl("FLOOR",  150, 354,  96);
+    lbl("MIN f0",  38, 470,  96, juce::Colour(0xfff0c467));
+    lbl("MAX f0", 150, 470,  96, juce::Colour(0xfff0c467));
 
-    // Card 2 Labels (Top Row: 20-Harmonic Resynthesis)
-    lbl("HARMONICS",  282, 298, 98, juce::Colour(0xffc7b8ff));
-    lbl("DETUNE",     388, 298, 98, juce::Colour(0xffc7b8ff));
-    lbl("TIMING",     494, 298, 98, juce::Colour(0xffc7b8ff));
-    lbl("HUMAN DRIFT",600, 298, 98, juce::Colour(0xffc7b8ff));
+    // Card 2 Labels (Header Voice selector + 2x4 Knob Grid)
+    lbl("ENSEMBLE",   570, 277, 64, juce::Colour(0xffc7b8ff));
 
-    // Card 2 Labels (Bottom Row: High-Band Air & Stereo Field)
-    lbl("AIR BLEND",  282, 424, 98, juce::Colour(0xff7eeeff));
-    lbl("TONE TILT",  388, 424, 98, juce::Colour(0xff7eeeff));
-    lbl("WIDTH",      494, 424, 98, juce::Colour(0xff7eeeff));
-    lbl("DOUBLER MIX",600, 424, 98, juce::Colour(0xff6bf5cf));
+    lbl("HARMONICS",  296, 316, 100, juce::Colour(0xffc7b8ff));
+    lbl("DETUNE",     404, 316, 100, juce::Colour(0xffc7b8ff));
+    lbl("TIMING",     512, 316, 100, juce::Colour(0xffc7b8ff));
+    lbl("HUMAN DRIFT",620, 316, 100, juce::Colour(0xffc7b8ff));
+
+    lbl("AIR BLEND",  296, 446, 100, juce::Colour(0xff7eeeff));
+    lbl("TONE TILT",  404, 446, 100, juce::Colour(0xff7eeeff));
+    lbl("WIDTH",      512, 446, 100, juce::Colour(0xff7eeeff));
+    lbl("DOUBLER MIX",620, 446, 100, juce::Colour(0xff6bf5cf));
 
     // Card 3 Labels
-    lbl("AUDITION MODE", 740, 298, 168, juce::Colour(0xff7eeeff));
-    lbl("OUTPUT GAIN",   770, 360, 108, juce::Colour(0xffc6d1e6));
+    lbl("AUDITION MODE", 762, 300, 168, juce::Colour(0xff7eeeff));
+    lbl("OUTPUT GAIN",   792, 366, 108, juce::Colour(0xffc6d1e6));
 
-    g.setColour(juce::Colour(0xff6b7894));
+    g.setColour(juce::Colour(0xff6f7c98));
     g.setFont(juce::Font(juce::FontOptions(8.6f, juce::Font::plain)));
-    g.drawFittedText("H1-HN: Ping-Pong 20-Sine Choir\n>HN: Delayed Original Stereo Air\nDry Path: Zero-Latency Center",
-                     736, 462, 176, 42, juce::Justification::centred, 3);
+    g.drawFittedText("4096-pt 8x WOLA Linear-Phase\n5-Frame Lookahead f0 Guard\nMcAulay-Quatieri Birth/Death\n(Zero Pitch-Jump Warble)",
+                     758, 472, 176, 54, juce::Justification::centred, 4);
 }
 
 void ChoirFairyAudioProcessorEditor::resized()
 {
-    // Top 20 Hz - 16 kHz Spectrum & 20-Harmonic Visualizer
-    spectrumView.setBounds(16, 54, 908, 204);
+    spectrumView.setBounds(16, 54, 928, 206);
 
-    // Card 1: Low-Cut & Pitch Range
-    slopeBox.setBounds(38, 312, 196, 25);
-    offsetKnob.setBounds(38,  358, 88, 82);
-    floorKnob.setBounds(146,  358, 88, 82);
-    minF0Knob.setBounds(38,   464, 88, 80);
-    maxF0Knob.setBounds(146,  464, 88, 80);
+    // Card 1: Surgical Low-Cut & Pitch Range
+    slopeBox.setBounds(30,     314, 110, 26);
+    phaseModeBox.setBounds(148, 314, 110, 26);
+    offsetKnob.setBounds(42,   370,  88, 86);
+    floorKnob.setBounds(154,   370,  88, 86);
+    minF0Knob.setBounds(42,    484,  88, 80);
+    maxF0Knob.setBounds(154,   484,  88, 80);
 
-    // Card 2: 20-Harmonic Choir Engine (2x4 Grid)
-    numHarmKnob.setBounds(286,  314, 90, 94);
-    detuneKnob.setBounds(392,   314, 90, 94);
-    timingKnob.setBounds(498,   314, 90, 94);
-    driftKnob.setBounds(604,    314, 90, 94);
+    // Card 2: HQ Lookahead SMS Choir Engine
+    voiceModeBox.setBounds(636, 274, 92, 22);
 
-    airBlendKnob.setBounds(286, 440, 90, 98);
-    tiltKnob.setBounds(392,     440, 90, 98);
-    widthKnob.setBounds(498,    440, 90, 98);
-    mixKnob.setBounds(604,      440, 90, 98);
+    numHarmKnob.setBounds(300,  332, 92, 96);
+    detuneKnob.setBounds(408,   332, 92, 96);
+    timingKnob.setBounds(516,   332, 92, 96);
+    driftKnob.setBounds(624,    332, 92, 96);
+
+    airBlendKnob.setBounds(300, 462, 92, 100);
+    tiltKnob.setBounds(408,     462, 92, 100);
+    widthKnob.setBounds(516,    462, 92, 100);
+    mixKnob.setBounds(624,      462, 92, 100);
 
     // Card 3: Monitor & Output
-    auditionBox.setBounds(740, 316, 168, 28);
-    outGainKnob.setBounds(774, 374, 100, 86);
-    bypassBtn.setBounds(762,   510, 124, 28);
+    auditionBox.setBounds(762, 318, 168, 28);
+    outGainKnob.setBounds(796, 380, 100, 88);
+    bypassBtn.setBounds(784,   532, 124, 28);
 }
